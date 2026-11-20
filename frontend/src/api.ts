@@ -1,5 +1,9 @@
 import type { CourseSearchResponse, Option, Selections } from "../../backend/src/cuny/scraper";
 import type { ProfessorSearchResponse } from "../../backend/src/professors/search";
+import type { AdvisorMessage } from "../../backend/src/advisor/model";
+import type { AdvisorSchedule } from "../../backend/src/advisor/store";
+
+export type { AdvisorMessage, AdvisorSchedule };
 
 export interface Catalog {
   term: string;
@@ -81,4 +85,33 @@ export async function getRating(name: string, college: string, signal: AbortSign
 
 export function errorMessage(error: unknown) {
   return error instanceof Error && !(error instanceof TypeError) ? error.message : "Couldn't reach the API. Try again.";
+}
+
+async function send<T>(path: string, method: "POST" | "PUT", body: object): Promise<T> {
+  return readJson(await fetch(`/api/advisor/${path}`, {
+    method,
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  }));
+}
+
+export function getAdvisorSchedules(signal: AbortSignal) {
+  return get<{ schedules: AdvisorSchedule[] }>("advisor/schedules", signal);
+}
+
+export function sendAdvisorGoals(goals: string) {
+  return send<{ message: string }>("goals", "POST", { goals });
+}
+
+export function sendAdvisorMessage(scope: Catalog, goals: string, messages: AdvisorMessage[], requestId: string) {
+  return send<{ message: string; schedule?: AdvisorSchedule }>("message", "POST", { ...scope, goals, messages, requestId });
+}
+
+export function setAdvisorCommitment(id: string, committed: boolean) {
+  return send<{ schedules: AdvisorSchedule[] }>(`schedules/${id}/commitment`, "PUT", { committed });
+}
+
+export async function getMatchingClasses({ term, college }: Catalog, signal: AbortSignal) {
+  const { classNumbers } = await get<{ classNumbers: string[] }>(`advisor/matches?${new URLSearchParams({ term, college })}`, signal);
+  return classNumbers;
 }

@@ -1,14 +1,15 @@
 import { useEffect, useState, type FormEvent } from "react";
 import type { CourseSearchResponse, Option } from "../../backend/src/cuny/scraper";
-import { errorMessage, getCourses, getRating, getSubjects, pageSize, type Catalog, type CourseFilters } from "./api";
+import { errorMessage, getCourses, getMatchingClasses, getRating, getSubjects, pageSize, type Catalog, type CourseFilters } from "./api";
 import { findConflict, sectionId, type PlannedSection } from "./plan";
 
 interface CatalogProps extends Catalog {
   plan: PlannedSection[];
+  interestVersion: number;
   onToggle: (entry: PlannedSection) => void;
 }
 
-export function CourseCatalog({ term, college, plan, onToggle }: CatalogProps) {
+export function CourseCatalog({ term, college, plan, interestVersion, onToggle }: CatalogProps) {
   const [subjects, setSubjects] = useState<Option[]>([]);
   const [subjectStatus, setSubjectStatus] = useState("Loading subjects…");
   const [subjectAttempt, setSubjectAttempt] = useState(0);
@@ -19,6 +20,7 @@ export function CourseCatalog({ term, college, plan, onToggle }: CatalogProps) {
   const [result, setResult] = useState<CourseSearchResponse>();
   const [status, setStatus] = useState("");
   const [error, setError] = useState("");
+  const [matchingClasses, setMatchingClasses] = useState<Set<string>>(new Set());
 
   useEffect(() => {
     const controller = new AbortController();
@@ -50,6 +52,16 @@ export function CourseCatalog({ term, college, plan, onToggle }: CatalogProps) {
     });
     return () => controller.abort();
   }, [request]);
+
+  useEffect(() => {
+    setMatchingClasses(new Set());
+    if (!result?.total) return;
+    const controller = new AbortController();
+    getMatchingClasses({ term, college }, controller.signal).then((classNumbers) => {
+      if (!controller.signal.aborted) setMatchingClasses(new Set(classNumbers));
+    }).catch(() => {});
+    return () => controller.abort();
+  }, [result, term, college, interestVersion]);
 
   function search(filters: CourseFilters, offset = 0) {
     setError("");
@@ -132,6 +144,9 @@ export function CourseCatalog({ term, college, plan, onToggle }: CatalogProps) {
                           onClick={() => onToggle(entry)}
                         >{selected ? "Remove" : "Add"}</button>
                       </div>
+                      {matchingClasses.has(section.classNumber) && (
+                        <strong className="interest-match">A student with a similar interest plans to take this class.</strong>
+                      )}
                       <div className="section-details">{section.daysAndTimes || "Time TBA"}</div>
                       <div className="section-details">{[section.instructionMode, section.room, section.meetingDates].filter(Boolean).join(" · ")}</div>
                       {(section.instructor || "TBA").split("\n").map((name) =>

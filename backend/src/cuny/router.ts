@@ -8,7 +8,7 @@ import {
 const optionLifetime = 24 * 60 * 60 * 1000;
 const retryDelay = 60_000;
 
-class HttpError extends Error {
+export class CunyHttpError extends Error {
   constructor(readonly status: number, message: string) {
     super(message);
   }
@@ -20,11 +20,12 @@ function compactCode(code: string): string {
 
 function searchCourses(
   courses: Course[], query: string, codeMatch: RegExpMatchArray | null, subject: string | undefined, openOnly: boolean,
+  career?: string,
 ): Course[] {
   const compact = compactCode(query);
   const terms = query.toLowerCase().split(/\s+/).filter(Boolean);
   return courses.flatMap((course) => {
-    if (subject && course.subject !== subject) return [];
+    if ((subject && course.subject !== subject) || (career && course.career !== career)) return [];
     const catalogText = [course.code, course.subjectName, course.title].join(" ").toLowerCase();
     const matchesCode = codeMatch &&
       course.displaySubject.replace(/\.$/, "").toUpperCase() === codeMatch[1] &&
@@ -42,11 +43,10 @@ function searchCourses(
   });
 }
 
-export function createCunyRouter(
+export function createCunyCatalog(
   database: Sequelize | undefined,
   source = { scrapeSelections, scrapeSchedule, scrapeSubjects },
-): Router {
-  const router = Router();
+) {
   const cache = database?.define<Model<{ key: string; payload: Selections | Schedule | Option[]; fetchedAt: Date }>>(
     "CunyGlobalSearchCache",
     {
@@ -63,7 +63,7 @@ export function createCunyRouter(
   const failedImports = new Map<string, number>();
 
   async function getCache() {
-    if (!cache) throw new HttpError(503, "Configure DATABASE_URL to use CUNY search.");
+    if (!cache) throw new CunyHttpError(503, "Configure DATABASE_URL to use CUNY search.");
     schema ??= cache.sync().catch((error: unknown) => {
       schema = undefined;
       throw error;
@@ -85,7 +85,7 @@ export function createCunyRouter(
       } catch (error) {
         console.error("CUNY selections import failed:", error);
         if (saved) return saved.getDataValue("payload") as Selections;
-        throw new HttpError(502, "Global Search selections are currently unavailable.");
+        throw new CunyHttpError(502, "Global Search selections are currently unavailable.");
       }
       await table.upsert({ key: "selections", payload: selections, fetchedAt: new Date() });
       return selections;
@@ -93,27 +93,14 @@ export function createCunyRouter(
     return optionsRequest;
   }
 
-  router.get("/selections", async (_request, response) => {
-    response.json(await getSelections());
-  });
-
-  function catalogIds(term: unknown, college: unknown) {
-    if (typeof term !== "string" || !/^\d{4}$/.test(term) ||
-        typeof college !== "string" || !/^[A-Z0-9]{3,12}$/i.test(college)) {
-      throw new HttpError(400, "Provide valid term and college IDs.");
-    }
-    return { term, college: college.toUpperCase() };
-  }
-
   async function checkCatalog(term: string, college: string) {
     const selections = await getSelections();
     if (!selections.terms.some(({ id }) => id === term) || !selections.colleges.some(({ id }) => id === college)) {
-      throw new HttpError(400, "Select a term and college listed by Global Search.");
+      throw new CunyHttpError(400, "Select a term and college listed by Global Search.");
     }
   }
 
-  router.get("/subjects", async (request, response) => {
-    const { term, college } = catalogIds(request.query.term, request.query.college);
+  async function getSubjects(term: string, college: string) {
     const key = `subjects:${term}:${college}`;
     let pending = subjectRequests.get(key);
     if (!pending) {
@@ -133,31 +120,18 @@ export function createCunyRouter(
         } catch (error) {
           console.error("CUNY subjects import failed:", error);
           if (saved) return saved.getDataValue("payload") as Option[];
-          throw new HttpError(502, "Global Search subjects are currently unavailable.");
+          throw new CunyHttpError(502, "Global Search subjects are currently unavailable.");
         }
         await table.upsert({ key, payload: subjects, fetchedAt: new Date() });
         return subjects;
       })().finally(() => subjectRequests.delete(key));
       subjectRequests.set(key, pending);
     }
-    response.json(await pending);
-  });
+    return pending;
+  }
 
-  router.get("/courses", async (request, response) => {
-    const { term, college } = catalogIds(request.query.term, request.query.college);
-    const { q = "", limit = "50", offset = "0", subject: subjectFilter, openOnly = "false" } = request.query;
-    if (
-      typeof q !== "string" || q.length > 120 ||
-      typeof limit !== "string" || !/^\d{1,3}$/.test(limit) || Number(limit) < 1 || Number(limit) > 100 ||
-      typeof offset !== "string" || !/^\d{1,8}$/.test(offset) ||
-      (openOnly !== "true" && openOnly !== "false") ||
-      (subjectFilter !== undefined && (typeof subjectFilter !== "string" || !/^[a-z0-9&/-]{1,20}$/i.test(subjectFilter)))
-    ) {
-      throw new HttpError(400, "Provide valid query, subject, openOnly, limit (1–100), and offset.");
-    }
-
+  async function getCourses(term: string, college: string, q: string, subject: string | undefined, openOnly: boolean, limit: number, offset: number, career?: string) {
     const codeMatch = q.trim().toUpperCase().match(/^([A-Z][A-Z&/-]{0,19})\.?\s*(\d[A-Z\d.-]*)$/);
-    const subject = subjectFilter?.toUpperCase();
     const importSubject = subject ?? codeMatch?.[1];
     const scheduleKey = `schedule:${term}:${college}`;
     const key = importSubject ? `subject:${term}:${college}:${importSubject}` : scheduleKey;
@@ -172,34 +146,30 @@ export function createCunyRouter(
     }
     if (saved) {
       const schedule = saved.getDataValue("payload") as Schedule;
-      const matches = searchCourses(schedule.courses, q, codeMatch, subject, openOnly === "true");
-      const start = Number(offset);
-      response.json({
+      const matches = searchCourses(schedule.courses, q, codeMatch, subject, openOnly, career);
+      const result: CourseSearchResponse = {
         term: schedule.term,
         college: schedule.college,
         fetchedAt: saved.getDataValue("fetchedAt").toISOString(),
         subjects: schedule.subjects,
         total: matches.length,
-        courses: matches.slice(start, start + Number(limit)),
-      } satisfies CourseSearchResponse);
-      return;
+        courses: matches.slice(offset, offset + limit),
+      };
+      return { status: 200, result } as const;
     }
 
     if (activeImport === key || activeImport === scheduleKey) {
-      response.set("Retry-After", "5").status(202).json({ status: "importing" });
-      return;
+      return { status: 202, retryAfter: 5 } as const;
     }
     const now = Date.now();
     for (const [failed, retryAt] of failedImports) {
       if (retryAt <= now) failedImports.delete(failed);
     }
     if (failedImports.has(key)) {
-      response.set("Retry-After", "60");
-      throw new HttpError(502, "The Global Search import failed. Try again shortly.");
+      return { status: 502, retryAfter: 60, error: "The Global Search import failed. Try again shortly." } as const;
     }
     if (activeImport) {
-      response.set("Retry-After", "10");
-      throw new HttpError(503, "Another Global Search import is running. Try again shortly.");
+      return { status: 503, retryAfter: 10, error: "Another Global Search import is running. Try again shortly." } as const;
     }
 
     activeImport = key;
@@ -215,7 +185,52 @@ export function createCunyRouter(
         activeImport = undefined;
       }
     })();
-    response.set("Retry-After", "5").status(202).json({ status: "importing" });
+    return { status: 202, retryAfter: 5 } as const;
+  }
+
+  return { getSelections, checkCatalog, getSubjects, getCourses };
+}
+
+export function catalogIds(term: unknown, college: unknown) {
+  if (typeof term !== "string" || !/^\d{4}$/.test(term) ||
+      typeof college !== "string" || !/^[A-Z0-9]{3,12}$/i.test(college)) {
+    throw new CunyHttpError(400, "Provide valid term and college IDs.");
+  }
+  return { term, college: college.toUpperCase() };
+}
+
+export function createCunyRouter(
+  database: Sequelize | undefined,
+  source?: Parameters<typeof createCunyCatalog>[1],
+  catalog = createCunyCatalog(database, source),
+): Router {
+  const router = Router();
+  router.get("/selections", async (_request, response) => {
+    response.json(await catalog.getSelections());
+  });
+  router.get("/subjects", async (request, response) => {
+    const { term, college } = catalogIds(request.query.term, request.query.college);
+    response.json(await catalog.getSubjects(term, college));
+  });
+  router.get("/courses", async (request, response) => {
+    const { term, college } = catalogIds(request.query.term, request.query.college);
+    const { q = "", limit = "50", offset = "0", subject, openOnly = "false" } = request.query;
+    if (
+      typeof q !== "string" || q.length > 120 ||
+      typeof limit !== "string" || !/^\d{1,3}$/.test(limit) || Number(limit) < 1 || Number(limit) > 100 ||
+      typeof offset !== "string" || !/^\d{1,8}$/.test(offset) ||
+      (openOnly !== "true" && openOnly !== "false") ||
+      (subject !== undefined && (typeof subject !== "string" || !/^[a-z0-9&/-]{1,20}$/i.test(subject)))
+    ) {
+      throw new CunyHttpError(400, "Provide valid query, subject, openOnly, limit (1–100), and offset.");
+    }
+    const search = await catalog.getCourses(term, college, q, subject?.toUpperCase(), openOnly === "true", Number(limit), Number(offset));
+    if (search.status === 200) {
+      response.json(search.result);
+      return;
+    }
+    response.set("Retry-After", String(search.retryAfter)).status(search.status)
+      .json(search.status === 202 ? { status: "importing" } : { error: search.error });
   });
 
   const handleError: ErrorRequestHandler = (error, _request, response, next) => {
@@ -223,7 +238,7 @@ export function createCunyRouter(
       next(error);
       return;
     }
-    if (error instanceof HttpError) {
+    if (error instanceof CunyHttpError) {
       response.status(error.status).json({ error: error.message });
       return;
     }

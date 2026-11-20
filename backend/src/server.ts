@@ -1,5 +1,6 @@
 import express from "express";
-import { createCunyRouter } from "./cuny/router.js";
+import { createAdvisorRouter } from "./advisor/router.js";
+import { createCunyCatalog, createCunyRouter } from "./cuny/router.js";
 import { database } from "./database.js";
 import { professorRouter } from "./professors/router.js";
 
@@ -7,7 +8,9 @@ const app = express();
 const port = Number(process.env.PORT ?? 3001);
 
 app.use(express.json());
-app.use("/api/cuny", createCunyRouter(database));
+const catalog = createCunyCatalog(database);
+app.use("/api/cuny", createCunyRouter(database, undefined, catalog));
+app.use("/api/advisor", createAdvisorRouter(database, catalog));
 app.use("/api/professors", professorRouter);
 
 app.get("/api/health", (_request, response) => {

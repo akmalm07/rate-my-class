@@ -53,6 +53,8 @@ test("planner browser flow handles filters, polling, failures, ratings, and save
   let firstFilteredPage = 0;
   await context.route("**/api/**", async (route) => {
     const { pathname, searchParams } = new URL(route.request().url());
+    if (pathname === "/api/advisor/schedules") return route.fulfill({ json: { schedules: [] } });
+    if (pathname === "/api/advisor/matches") return route.fulfill({ json: { classNumbers: [] } });
     if (pathname.endsWith("/selections")) {
       if (!selectionsAvailable) return route.fulfill({ status: 503, json: { error: "Catalog unavailable." } });
       return route.fulfill({ json: {

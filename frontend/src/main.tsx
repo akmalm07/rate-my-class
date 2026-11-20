@@ -1,7 +1,8 @@
 import { StrictMode, useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
 import type { Selections } from "../../backend/src/cuny/scraper";
-import { errorMessage, getSelections } from "./api";
+import { Advisor } from "./advisor";
+import { errorMessage, getAdvisorSchedules, getSelections, setAdvisorCommitment, type AdvisorSchedule } from "./api";
 import { CourseCatalog } from "./catalog";
 import {
   createPlanLink, findConflict, getSharedPlan, loadPlan, loadSavedSchedules, savePlan, saveSchedule,
@@ -23,6 +24,20 @@ function App() {
   const [selectionAttempt, setSelectionAttempt] = useState(0);
   const [loadingPlan, setLoadingPlan] = useState(shared.has("plan"));
   const [savedSchedules, setSavedSchedules] = useState<SavedSchedule[]>([]);
+  const [advisorSchedules, setAdvisorSchedules] = useState<AdvisorSchedule[]>([]);
+  const [advisorScheduleError, setAdvisorScheduleError] = useState("");
+  const [interestVersion, setInterestVersion] = useState(0);
+  const [commitPending, setCommitPending] = useState(false);
+
+  useEffect(() => {
+    const controller = new AbortController();
+    getAdvisorSchedules(controller.signal).then(({ schedules }) => {
+      if (!controller.signal.aborted) setAdvisorSchedules((current) => current.length ? current : schedules);
+    }).catch((error: unknown) => {
+      if (!controller.signal.aborted) setAdvisorScheduleError(errorMessage(error));
+    });
+    return () => controller.abort();
+  }, []);
 
   useEffect(() => {
     function reloadSchedules() {
@@ -138,6 +153,21 @@ function App() {
     setNotice(`Opened ${schedule.name}.`);
   }
 
+  async function changeCommitment(schedule: AdvisorSchedule) {
+    if (commitPending) return;
+    setCommitPending(true);
+    setAdvisorScheduleError("");
+    try {
+      const { schedules } = await setAdvisorCommitment(schedule.id, !schedule.committed);
+      setAdvisorSchedules(schedules);
+      setNotice(schedule.committed ? "Schedule commitment withdrawn." : "Schedule committed.");
+    } catch (error) {
+      setAdvisorScheduleError(errorMessage(error));
+    } finally {
+      setCommitPending(false);
+    }
+  }
+
   return (
     <div className="app-shell">
       <aside className="sidebar">
@@ -192,17 +222,29 @@ function App() {
                 </div>
               )}
               {termLabel && collegeLabel && !loadingPlan && (
-                <CourseCatalog key={`${term}:${college}`} term={term} college={college} plan={plan} onToggle={toggle} />
+                <CourseCatalog key={`${term}:${college}`} term={term} college={college} plan={plan} onToggle={toggle}
+                  interestVersion={interestVersion} />
               )}
             </section>
             <Schedule plan={termPlan} colleges={selections?.colleges ?? []} terms={selections?.terms ?? []} loading={loadingPlan}
               savedSchedules={savedSchedules} onSave={saveCurrentSchedule} onOpen={openSchedule}
+              advisorSchedules={advisorSchedules} advisorError={advisorScheduleError} commitPending={commitPending}
+              onCommit={(schedule) => void changeCommitment(schedule)}
               onRemove={toggle} onClear={() => setPlan((current) => current.filter((entry) => entry.term !== term))} />
           </div>
         </div>
       </main>
       {warning && <div className="storage-warning" role="status">{warning} <button type="button" onClick={() => setWarning("")}>Dismiss</button></div>}
       {notice && <div className="toast" role="status">{notice}</div>}
+      <Advisor selections={selections} catalog={{ term, college }} onGoals={() => setInterestVersion((version) => version + 1)}
+        onSave={(schedule) => {
+          setAdvisorScheduleError("");
+          setAdvisorSchedules((current) => [schedule, ...current.filter(({ id }) => id !== schedule.id)]);
+        }}
+        onView={(schedule) => {
+          openSchedule(schedule);
+          requestAnimationFrame(() => document.getElementById("planner")?.scrollIntoView({ block: "start" }));
+        }} />
     </div>
   );
 }

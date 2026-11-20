@@ -1,5 +1,6 @@
 import { useState } from "react";
 import type { Option } from "../../backend/src/cuny/scraper";
+import type { AdvisorSchedule } from "./api";
 import { formatTime, meetings, sectionId, weekdays, type PlannedSection, type SavedSchedule } from "./plan";
 
 const hourHeight = 48;
@@ -11,18 +12,29 @@ interface ScheduleProps {
   terms: Option[];
   loading: boolean;
   savedSchedules: SavedSchedule[];
+  advisorSchedules: AdvisorSchedule[];
+  advisorError: string;
+  commitPending: boolean;
   onSave: (name: string) => boolean;
   onOpen: (schedule: SavedSchedule) => void;
+  onCommit: (schedule: AdvisorSchedule) => void;
   onRemove: (entry: PlannedSection) => void;
   onClear: () => void;
 }
 
-export function Schedule({ plan, colleges, terms, loading, savedSchedules, onSave, onOpen, onRemove, onClear }: ScheduleProps) {
+export function Schedule({
+  plan, colleges, terms, loading, savedSchedules, advisorSchedules, advisorError, commitPending,
+  onSave, onOpen, onCommit, onRemove, onClear,
+}: ScheduleProps) {
   const [name, setName] = useState("");
   const events = plan.flatMap((entry) => meetings(entry.section).map((meeting, index) => ({ entry, meeting, index })));
   const start = Math.min(8, ...events.map(({ meeting }) => Math.floor(meeting.start / 60)));
   const end = Math.max(20, ...events.map(({ meeting }) => Math.ceil(meeting.end / 60)));
   const hours = Array.from({ length: end - start }, (_, index) => start + index);
+  const schedules = [
+    ...advisorSchedules.map((advisor) => ({ schedule: advisor, advisor })),
+    ...savedSchedules.map((schedule) => ({ schedule, advisor: undefined })),
+  ];
 
   return (
     <section className="schedule-panel" id="planner" aria-labelledby="schedule-heading">
@@ -44,23 +56,36 @@ export function Schedule({ plan, colleges, terms, loading, savedSchedules, onSav
             <button className="share-button" type="submit">Save schedule</button>
           </form>
         )}
-        {savedSchedules.length > 0 && (
+        {schedules.length > 0 && (
           <>
             <ul className="saved-schedule-list">
-              {savedSchedules.map((schedule) => (
-                <li key={schedule.name}>
+              {schedules.map(({ schedule, advisor }) => (
+                <li key={advisor?.id ?? schedule.name}>
                   <button className="saved-schedule" type="button" disabled={loading}
                     onClick={() => onOpen(schedule)}>
                     <strong>{schedule.name}</strong>
                     <span>{terms.find(({ id }) => id === schedule.term)?.name ?? `Term ${schedule.term}`} · {schedule.sections.length} {schedule.sections.length === 1 ? "section" : "sections"}</span>
                   </button>
+                  {advisor && (
+                    <div className="commitment">
+                      <span>{advisor.committed ? "Committed" : "Advisor draft"}{Boolean(advisor.interests.length) &&
+                        ` · ${advisor.interests.join(", ")}`}</span>
+                      <button className="text-button" type="button" disabled={commitPending} onClick={() => onCommit(advisor)}>
+                        {advisor.committed ? "Withdraw commitment" : "Commit schedule"}
+                      </button>
+                    </div>
+                  )}
                 </li>
               ))}
             </ul>
             <p className="saved-schedule-hint">Opening a saved schedule replaces the draft for that term.</p>
+            {advisorSchedules.length > 0 && <p className="saved-schedule-hint">
+              Committing shares an anonymous interest match for these sections and replaces any previous commitment for the term.
+            </p>}
           </>
         )}
-        {!savedSchedules.length && !plan.length && <p className="saved-schedule-hint">Add a section to save your first schedule.</p>}
+        {!schedules.length && !plan.length && <p className="saved-schedule-hint">Add a section to save your first schedule.</p>}
+        {advisorError && <p className="advisor-error" role="alert">{advisorError}</p>}
       </section>
       {loading ? <p className="catalog-status" role="status">Restoring shared schedule…</p> : (
         <>
