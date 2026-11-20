@@ -433,9 +433,9 @@ function App() {
   return (
     <div className="app-shell">
       <aside className="sidebar">
-        <a className="brand" href="#" aria-label="Rate My Class home">
-          <span className="brand-mark">r<span>.</span></span>
-          <span>rate my class</span>
+        <a className="brand" href="#" aria-label="Semesterly home">
+          <span className="brand-mark">S<span>.</span></span>
+          <span>Semesterly</span>
         </a>
 
         <div className="sidebar-label">WORKSPACE</div>
