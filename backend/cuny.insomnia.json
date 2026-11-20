@@ -1,0 +1,57 @@
+{
+  "_type": "export",
+  "__export_format": 4,
+  "__export_source": "rate-my-class",
+  "resources": [
+    {
+      "_id": "wrk_rate_my_class",
+      "_type": "workspace",
+      "parentId": null,
+      "name": "Rate My Class · Local API",
+      "scope": "collection"
+    },
+    {
+      "_id": "req_rate_my_class_ready",
+      "_type": "request",
+      "parentId": "wrk_rate_my_class",
+      "name": "1. Check PostgreSQL connection",
+      "method": "GET",
+      "url": "http://localhost:3001/api/ready"
+    },
+    {
+      "_id": "req_rate_my_class_selections",
+      "_type": "request",
+      "parentId": "wrk_rate_my_class",
+      "name": "2. List CUNY terms and colleges",
+      "method": "GET",
+      "url": "http://localhost:3001/api/cuny/selections"
+    },
+    {
+      "_id": "req_rate_my_class_english",
+      "_type": "request",
+      "parentId": "wrk_rate_my_class",
+      "name": "3. Find Queensborough ENGL 101",
+      "method": "GET",
+      "url": "http://localhost:3001/api/cuny/courses",
+      "parameters": [
+        { "name": "term", "value": "1272" },
+        { "name": "college", "value": "QCC01" },
+        { "name": "q", "value": "ENGL101" }
+      ]
+    },
+    {
+      "_id": "req_rate_my_class_courses",
+      "_type": "request",
+      "parentId": "wrk_rate_my_class",
+      "name": "4. Browse Queensborough courses",
+      "method": "GET",
+      "url": "http://localhost:3001/api/cuny/courses",
+      "parameters": [
+        { "name": "term", "value": "1272" },
+        { "name": "college", "value": "QCC01" },
+        { "name": "limit", "value": "10" },
+        { "name": "offset", "value": "0" }
+      ]
+    }
+  ]
+}
