@@ -1,0 +1,13 @@
+{
+  "name": "rate-my-class",
+  "private": true,
+  "engines": { "node": ">=22.12.0" },
+  "workspaces": ["backend", "frontend"],
+  "scripts": {
+    "dev": "concurrently --kill-others-on-fail --names api,web \"npm run dev -w backend\" \"npm run dev -w frontend\"",
+    "build": "npm run build --workspaces"
+  },
+  "devDependencies": {
+    "concurrently": "^9.2.1"
+  }
+}
