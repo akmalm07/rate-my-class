@@ -1,10 +1,12 @@
 import express from "express";
+import { createCunyRouter } from "./cuny/router.js";
 import { database } from "./database.js";
 
 const app = express();
 const port = Number(process.env.PORT ?? 3001);
 
 app.use(express.json());
+app.use("/api/cuny", createCunyRouter(database));
 
 app.get("/api/health", (_request, response) => {
   response.json({ status: "ok" });
