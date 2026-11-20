@@ -11,12 +11,21 @@ class HttpError extends Error {
   }
 }
 
-function searchCourses(courses: Course[], query: string): Course[] {
+function compactCode(code: string): string {
+  return code.toLowerCase().replace(/[\s.-]/g, "");
+}
+
+function searchCourses(courses: Course[], query: string, codeMatch: RegExpMatchArray | null): Course[] {
+  if (codeMatch) {
+    const [, subject, catalogNumber] = codeMatch;
+    return courses.filter((course) => course.displaySubject.replace(/\.$/, "").toUpperCase() === subject &&
+      course.catalogNumber.toUpperCase() === catalogNumber);
+  }
+  const compact = compactCode(query);
   const terms = query.trim().toLowerCase().split(/\s+/).filter(Boolean);
   if (!terms.length) return courses;
-  const compact = terms.join("").replace(/[.-]/g, "");
   return courses.filter((course) => {
-    const code = course.code.toLowerCase().replace(/[\s.-]/g, "");
+    const code = compactCode(course.code);
     const searchable = [course.code, course.subjectName, course.title,
       ...course.sections.flatMap(({ classNumber, instructor }) => [classNumber, instructor]),
     ].join(" ").toLowerCase();
@@ -80,7 +89,7 @@ export function createCunyRouter(
   });
 
   router.get("/courses", async (request, response) => {
-    const { term, college, q = "", limit = "50", offset = "0" } = request.query;
+    const { term, college, q = "", limit = "50", offset = "0", subject: subjectOverride } = request.query;
     if (
       typeof term !== "string" || !/^\d{4}$/.test(term) ||
       typeof college !== "string" || !/^[A-Z0-9]{3,12}$/i.test(college) ||
@@ -92,13 +101,22 @@ export function createCunyRouter(
     }
 
     const collegeId = college.toUpperCase();
-    const key = `schedule:${term}:${collegeId}`;
+    const codeMatch = q.trim().toUpperCase().match(/^([A-Z][A-Z&/-]{0,19})\.?\s*(\d[A-Z\d.-]*)$/);
+    if (subjectOverride !== undefined && (!codeMatch ||
+        typeof subjectOverride !== "string" || !/^[a-z0-9&/-]{1,20}$/i.test(subjectOverride))) {
+      throw new HttpError(400, "The subject filter requires a valid subject ID and exact course code.");
+    }
+    const subject = subjectOverride?.toUpperCase() ?? codeMatch?.[1];
+    const scheduleKey = `schedule:${term}:${collegeId}`;
+    const key = subject ? `subject:${term}:${collegeId}:${subject}` : scheduleKey;
     const table = await getCache();
-    let saved = await table.findByPk(key);
+    const findSnapshot = async () =>
+      (await table.findByPk(scheduleKey)) ?? (subject ? await table.findByPk(key) : null);
+    let saved = await findSnapshot();
     if (!saved) {
       const selections = await getSelections();
       // The snapshot may have been committed while selections were loading.
-      saved = await table.findByPk(key);
+      saved = await findSnapshot();
       if (!saved && (
         !selections.terms.some(({ id }) => id === term) ||
         !selections.colleges.some(({ id }) => id === collegeId)
@@ -108,7 +126,7 @@ export function createCunyRouter(
     }
     if (saved) {
       const schedule = saved.getDataValue("payload") as Schedule;
-      const matches = searchCourses(schedule.courses, q);
+      const matches = searchCourses(schedule.courses, q, codeMatch);
       const start = Number(offset);
       response.json({
         term: schedule.term,
@@ -121,7 +139,7 @@ export function createCunyRouter(
       return;
     }
 
-    if (activeImport === key) {
+    if (activeImport === key || activeImport === scheduleKey) {
       response.set("Retry-After", "5").status(202).json({ status: "importing" });
       return;
     }
@@ -141,8 +159,8 @@ export function createCunyRouter(
     activeImport = key;
     void (async () => {
       try {
-        const schedule = await source.scrapeSchedule(term, collegeId);
-        // Publish the snapshot only after all subjects and careers succeed.
+        const schedule = await source.scrapeSchedule(term, collegeId, subject);
+        // Publish only after all selected subjects and careers succeed.
         await table.upsert({ key, payload: schedule, fetchedAt: new Date() });
       } catch (error) {
         failedImports.set(key, Date.now() + retryDelay);

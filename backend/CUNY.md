@@ -17,10 +17,11 @@ This uses the upstream values for every institution exposed in Global Search. It
 ## API
 
 - `GET /api/cuny/selections` returns live CUNY term and college IDs and labels, cached in PostgreSQL for 24 hours.
-- `GET /api/cuny/courses?term=1272&college=BKL01&q=ENGL1010` searches the saved schedule. Use IDs from the selections endpoint. An empty `q` browses all courses, and a query can match course code, title, subject, instructor, or section class number. Results include sections and support `limit` (1–100, default 50) and `offset` (default 0).
-- A cache miss returns HTTP `202` and starts an import of all subjects and careers for the selected term and college. Poll the same URL after the `Retry-After` interval. A large college may take several minutes. A different college/term requested while an import runs returns `503` with `Retry-After`. A failed upstream import returns `502` on subsequent polls during a one-minute retry cooldown.
+- `GET /api/cuny/courses?term=1272&college=BKL01&q=ENGL1010` matches the exact course code and returns its sections. On a cache miss, the API imports only the English subject across the careers CUNY exposes. Global Search provides a subject filter, so the API filters the returned courses locally. If the displayed prefix differs from the upstream subject ID, pass the upstream ID explicitly, for example `q=MM1&subject=MESG`.
+- An empty `q` browses all courses. Free-text queries can match titles, subjects, instructors, and section class numbers. These requests use the full schedule and start a full import if needed. Results support `limit` (1–100, default 50) and `offset` (default 0).
+- A cache miss returns HTTP `202`. Poll the same URL after the `Retry-After` interval. A full import for a large college may take several minutes. A separate import requested while one is running returns `503` with `Retry-After`. A failed upstream import returns `502` on subsequent polls during a one-minute retry cooldown.
 
-The API writes one complete PostgreSQL snapshot per college and term, including schedules with zero returned courses. A failed or incomplete scrape does not replace it. Saved schedules survive API restarts and are reused indefinitely. Treat seat status as a snapshot as of `fetchedAt`. The concurrent import limit is per Express process, so run one API process for this single-VPS setup.
+The API caches complete college/term schedules and targeted subject snapshots separately in PostgreSQL, including searches with zero returned courses. An incomplete scrape leaves the cache unchanged. Saved snapshots survive API restarts and are reused indefinitely. Treat seat status as a snapshot as of `fetchedAt`. The concurrent import limit is per Express process, so run one API process for this single-VPS setup.
 
 ## Tests
 

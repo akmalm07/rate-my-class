@@ -174,7 +174,7 @@ export async function readResults(page: Page, subject: Option, career: string): 
   });
 }
 
-export async function scrapeSchedule(term: string, college: string): Promise<Schedule> {
+export async function scrapeSchedule(term: string, college: string, subjectId?: string): Promise<Schedule> {
   return withPage(async (page) => {
     await page.locator("#t_pd").selectOption(term);
     await page.locator(`label[for="${college}"]`).click();
@@ -185,8 +185,9 @@ export async function scrapeSchedule(term: string, college: string): Promise<Sch
       throw new Error(`Global Search did not provide subjects and careers for ${college}/${term}`);
     }
 
+    const selectedSubjects = subjectId ? subjects.filter(({ id }) => id === subjectId) : subjects;
     const courses: Course[] = [];
-    for (const subject of subjects) {
+    for (const subject of selectedSubjects) {
       for (const career of careers) {
         // Submit one subject and career at a time, including closed sections.
         await page.locator("#subject_ld").selectOption(subject.id);
@@ -203,6 +204,6 @@ export async function scrapeSchedule(term: string, college: string): Promise<Sch
         await new Promise((resolve) => setTimeout(resolve, 500));
       }
     }
-    return { term, college, subjects, courses };
+    return { term, college, subjects: selectedSubjects, courses };
   });
 }

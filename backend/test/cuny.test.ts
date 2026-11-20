@@ -76,6 +76,7 @@ test("persists and searches a college and term snapshot across API instances", {
   };
   let selectionsCalls = 0;
   let scheduleCalls = 0;
+  const subjectCalls: string[] = [];
   let finish!: () => void;
   const importGate = new Promise<void>((resolve) => { finish = resolve; });
   const source = {
@@ -86,7 +87,13 @@ test("persists and searches a college and term snapshot across API instances", {
         colleges: [{ id: "BKL01", name: "Brooklyn College" }, { id: "QCC01", name: "Queensborough CC" }],
       };
     },
-    scrapeSchedule: async (term: string, college: string) => {
+    scrapeSchedule: async (term: string, college: string, subject?: string) => {
+      if (subject) {
+        subjectCalls.push(subject);
+        return { term, college, subjects: [{ id: subject, name: "English" }], courses: [
+          course, { ...course, code: "ENGL. 1010W", catalogNumber: "1010W" },
+        ] };
+      }
       scheduleCalls++;
       if (college === "QCC01") throw new Error("Test upstream failure");
       await importGate;
@@ -132,6 +139,13 @@ test("persists and searches a college and term snapshot across API instances", {
     assert.equal((await fetch(`${reopened}/courses?term=1269&college=BKL01`)).status, 200);
     assert.equal(scheduleCalls, 2);
     assert.equal(selectionsCalls, 1);
+    const targeted = "term=1272&college=QCC01&q=ENGL1010";
+    assert.equal((await fetch(`${reopened}/courses?${targeted}`)).status, 202);
+    assert.deepEqual((await waitForCache(reopened, targeted)).courses, [course]);
+    const sameSubject = await fetch(`${reopened}/courses?${targeted}W`);
+    assert.equal((await sameSubject.json()).courses[0].code, "ENGL. 1010W");
+    assert.deepEqual(subjectCalls, ["ENGL"]);
+    assert.equal(scheduleCalls, 2);
     const failure = `${reopened}/courses?term=1272&college=QCC01`;
     assert.equal((await fetch(failure)).status, 202);
     const retry = await fetch(failure);
