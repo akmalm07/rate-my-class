@@ -2,7 +2,7 @@ import { chromium, type Locator, type Page, type Response } from "playwright";
 
 export const globalSearchUrl = "https://globalsearch.cuny.edu/CFGlobalSearchTool/search.jsp";
 
-interface Option {
+export interface Option {
   id: string;
   name: string;
 }
@@ -40,6 +40,11 @@ export interface Schedule {
   college: string;
   subjects: Option[];
   courses: Course[];
+}
+
+export interface CourseSearchResponse extends Schedule {
+  fetchedAt: string;
+  total: number;
 }
 
 function clean(text: string): string {
@@ -114,9 +119,11 @@ export async function readResults(page: Page, subject: Option, career: string): 
         heading: link.parentElement?.textContent ?? "",
         sections: Array.from(rows, (row) => {
           const cells = Object.fromEntries(
-            Array.from(row.querySelectorAll("td[data-label]"), (cell) => [
-              cell.getAttribute("data-label"), cell.textContent ?? "",
-            ]),
+            Array.from(row.querySelectorAll("td[data-label]"), (cell) => {
+              const copy = cell.cloneNode(true) as HTMLElement;
+              for (const br of copy.querySelectorAll("br")) br.replaceWith("\n");
+              return [cell.getAttribute("data-label"), copy.textContent ?? ""];
+            }),
           );
           return {
             classNumber: cells.Class ?? "",
@@ -164,7 +171,7 @@ export async function readResults(page: Page, subject: Option, career: string): 
         section: clean(section.section),
         daysAndTimes: clean(section.daysAndTimes),
         room: clean(section.room),
-        instructor: clean(section.instructor),
+        instructor: [...new Set(section.instructor.split("\n").map(clean).filter(Boolean))].join("\n"),
         instructionMode: clean(section.instructionMode),
         meetingDates: clean(section.meetingDates),
         status: clean(section.status),
@@ -174,12 +181,20 @@ export async function readResults(page: Page, subject: Option, career: string): 
   });
 }
 
+async function selectCollege(page: Page, term: string, college: string) {
+  await page.locator("#t_pd").selectOption(term);
+  await page.locator(`label[for="${college}"]`).click();
+  await submit(page, "input[name=next_btn]");
+  return options(page.locator("#subject_ld"));
+}
+
+export async function scrapeSubjects(term: string, college: string): Promise<Option[]> {
+  return withPage((page) => selectCollege(page, term, college));
+}
+
 export async function scrapeSchedule(term: string, college: string, subjectId?: string): Promise<Schedule> {
   return withPage(async (page) => {
-    await page.locator("#t_pd").selectOption(term);
-    await page.locator(`label[for="${college}"]`).click();
-    await submit(page, "input[name=next_btn]");
-    const subjects = await options(page.locator("#subject_ld"));
+    const subjects = await selectCollege(page, term, college);
     const careers = await options(page.locator("#courseCareerId"));
     if (!subjects.length || !careers.length) {
       throw new Error(`Global Search did not provide subjects and careers for ${college}/${term}`);

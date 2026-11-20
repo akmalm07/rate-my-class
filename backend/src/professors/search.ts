@@ -38,3 +38,5 @@ export async function searchProfessors(name: string, options: ProfessorSearchOpt
     await client.close();
   }
 }
+
+export type ProfessorSearchResponse = Awaited<ReturnType<typeof searchProfessors>>;

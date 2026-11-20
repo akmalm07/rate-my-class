@@ -22,7 +22,7 @@ test("preserves catalog suffixes and parses hidden section rows, including close
       <div id="contentDivImg0" hidden><table class="classinfo"><tbody><tr>
         <td data-label="Class"><a>01314</a></td>
         <td data-label="Section">H1-LEC Regular</td>
-        <td data-label="Instructor">Ada Example</td>
+        <td data-label="Instructor">Ada Example<br>Ada Example<br>Grace Example</td>
         <td data-label="Status"><img title="Closed" alt="Open"></td>
       </tr></tbody></table></div>
     `);
@@ -33,6 +33,7 @@ test("preserves catalog suffixes and parses hidden section rows, including close
     assert.equal(course.title, "Writing - Seminar");
     assert.equal(course.sections[0].classNumber, "01314");
     assert.equal(course.sections[0].status, "Closed");
+    assert.equal(course.sections[0].instructor, "Ada Example\nGrace Example");
     const [alias] = await readResults(page, { id: "MESG", name: "Example filter" }, "GRAD");
     assert.equal(alias.subject, "MESG");
     assert.equal(alias.displaySubject, "ENGL.");
@@ -75,11 +76,16 @@ test("persists and searches a college and term snapshot across API instances", {
     }],
   };
   let selectionsCalls = 0;
+  let subjectsCalls = 0;
   let scheduleCalls = 0;
   const subjectCalls: string[] = [];
   let finish!: () => void;
   const importGate = new Promise<void>((resolve) => { finish = resolve; });
   const source = {
+    scrapeSubjects: async () => {
+      subjectsCalls++;
+      return [{ id: "ENGL", name: "English" }];
+    },
     scrapeSelections: async () => {
       selectionsCalls++;
       return {
@@ -91,7 +97,10 @@ test("persists and searches a college and term snapshot across API instances", {
       if (subject) {
         subjectCalls.push(subject);
         return { term, college, subjects: [{ id: subject, name: "English" }], courses: [
-          course, { ...course, code: "ENGL. 1010W", catalogNumber: "1010W" },
+          course, {
+            ...course, code: "ENGL. 1010W", catalogNumber: "1010W",
+            sections: [...course.sections, { ...course.sections[0], classNumber: "39020", status: "Open", instructor: "Grace Example" }],
+          },
         ] };
       }
       scheduleCalls++;
@@ -107,6 +116,11 @@ test("persists and searches a college and term snapshot across API instances", {
     assert.equal(invalid.status, 400);
     assert.equal((await fetch(`${url}/selections`)).status, 200);
     assert.equal(selectionsCalls, 1);
+    const subjectLists = await Promise.all(Array.from({ length: 3 }, async () =>
+      (await fetch(`${url}/subjects?${params}`)).json(),
+    ));
+    assert.ok(subjectLists.every((list) => list[0]?.id === "ENGL"));
+    assert.equal(subjectsCalls, 1);
     const concurrent = await Promise.all(
       Array.from({ length: 3 }, () => fetch(`${url}/courses?${params}`)),
     );
@@ -127,6 +141,8 @@ test("persists and searches a college and term snapshot across API instances", {
     assert.equal((await waitForCache(url, params)).total, 1);
     assert.equal((await waitForCache(url, "term=1269&college=BKL01")).total, 0);
     const reopened = await listen(servers, createCunyRouter(db, source));
+    assert.deepEqual(await (await fetch(`${reopened}/subjects?${params}`)).json(), subjectLists[0]);
+    assert.equal(subjectsCalls, 1);
     for (const query of ["engl1010", "ENGL 1010", "composition", "Ada Example", "39019"]) {
       const response = await fetch(`${reopened}/courses?${params}&q=${encodeURIComponent(query)}`);
       assert.equal(response.status, 200);
@@ -139,12 +155,25 @@ test("persists and searches a college and term snapshot across API instances", {
     assert.equal((await fetch(`${reopened}/courses?term=1269&college=BKL01`)).status, 200);
     assert.equal(scheduleCalls, 2);
     assert.equal(selectionsCalls, 1);
+    assert.equal((await (await fetch(`${reopened}/courses?${params}&subject=ENGL&q=composition`)).json()).total, 1);
+    assert.equal((await (await fetch(`${reopened}/courses?${params}&subject=MATH`)).json()).total, 0);
+    assert.equal((await (await fetch(`${reopened}/courses?${params}&openOnly=true`)).json()).total, 0);
+    assert.equal((await fetch(`${reopened}/courses?${params}&openOnly=maybe`)).status, 400);
     const targeted = "term=1272&college=QCC01&q=ENGL1010";
     assert.equal((await fetch(`${reopened}/courses?${targeted}`)).status, 202);
     assert.deepEqual((await waitForCache(reopened, targeted)).courses, [course]);
     const sameSubject = await fetch(`${reopened}/courses?${targeted}W`);
     assert.equal((await sameSubject.json()).courses[0].code, "ENGL. 1010W");
     assert.deepEqual(subjectCalls, ["ENGL"]);
+    const browseSubject = await fetch(`${reopened}/courses?term=1272&college=QCC01&subject=ENGL`);
+    assert.equal((await browseSubject.json()).total, 2);
+    const filtered = await fetch(`${reopened}/courses?term=1272&college=QCC01&subject=ENGL&openOnly=true&limit=1`);
+    const filteredPage = await filtered.json();
+    assert.equal(filteredPage.total, 1);
+    assert.equal(filteredPage.courses[0].code, "ENGL. 1010W");
+    assert.deepEqual(filteredPage.courses[0].sections.map(({ classNumber }: { classNumber: string }) => classNumber), ["39020"]);
+    const instructor = await fetch(`${reopened}/courses?term=1272&college=QCC01&subject=ENGL&q=Grace+Example`);
+    assert.deepEqual((await instructor.json()).courses[0].sections, filteredPage.courses[0].sections);
     assert.equal(scheduleCalls, 2);
     const failure = `${reopened}/courses?term=1272&college=QCC01`;
     assert.equal((await fetch(failure)).status, 202);

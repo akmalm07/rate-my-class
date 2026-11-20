@@ -36,7 +36,8 @@ test("searches professors through the SDK and returns a paginated JSON response"
                 firstName: "Ada",
                 lastName: "Example",
                 department: "English",
-                school: { legacyId: 223, name: "Brooklyn College" },
+                school: variables.query.text === "Ada Éxample" ? { legacyId: 226, name: "Hunter College" } :
+                  { legacyId: 223, name: "Brooklyn College" },
                 avgRating: secondPage ? 0 : 4.5,
                 numRatings: secondPage ? 0 : 12,
                 avgDifficulty: secondPage ? 0 : 2.5,
@@ -95,11 +96,24 @@ test("searches professors through the SDK and returns a paginated JSON response"
   assert.equal(error.status, 502);
   assert.deepEqual(await error.json(), { error: "Rate My Professors search is currently unavailable." });
 
+  const exact = await fetch(`${url}?q=Ada+Example&college=bkl01`);
+  assert.equal(exact.status, 200);
+  assert.equal((await exact.json()).professors[0].id, "42");
+  for (const name of ["Ada", "Ada Éxample"]) {
+    const fuzzy = await fetch(`${url}?${new URLSearchParams({ q: name, college: "BKL01" })}`);
+    assert.deepEqual(await fuzzy.json(), { total: 0, nextCursor: null, professors: [] });
+  }
+  assert.equal((await fetch(`${url}?q=Ada&college=UNKNOWN`)).status, 404);
+  assert.equal((await fetch(`${url}?q=Ada&college=BKL01&schoolId=223`)).status, 400);
+
   const schoolID = Buffer.from("School-223").toString("base64");
   assert.deepEqual(upstreamRequests, [
     { query: { text: "Ada Example", schoolID }, count: 1, cursor: "" },
     { query: { text: "Ada Example", schoolID }, count: 1, cursor },
     { query: { text: "No match" }, count: 20, cursor: "" },
     { query: { text: "Upstream failure" }, count: 20, cursor: "" },
+    { query: { text: "Ada Example", schoolID }, count: 20, cursor: "" },
+    { query: { text: "Ada", schoolID }, count: 20, cursor: "" },
+    { query: { text: "Ada Éxample", schoolID }, count: 20, cursor: "" },
   ]);
 });
