@@ -32,6 +32,7 @@ test("advisor saves real conflict-free drafts and publishes only opted-in matchi
       course,
       { ...course, code: "ENGL. 1020", catalogNumber: "1020", title: "Writing II",
         sections: [{ ...section, classNumber: "10002" }, { ...section, classNumber: "10003", daysAndTimes: "Tu 10:00AM - 11:00AM" }] },
+      { ...course, code: "ENGL. 1030", catalogNumber: "1030", sections: [{ ...section, classNumber: "10005", daysAndTimes: "We 10:00AM - 11:00AM" }] },
       { ...course, code: "ENGL. 7001", catalogNumber: "7001", career: "GRAD", sections: [{ ...section, classNumber: "10004" }] },
     ] }),
   });
@@ -43,6 +44,23 @@ test("advisor saves real conflict-free drafts and publishes only opted-in matchi
     const first = input[0];
     assert.ok("role" in first);
     if (tools[0].name === "record_interests") return call("record_interests", { interests: first.content.includes("biology") ? ["Biology"] : ["Writing"] });
+    if (tools[0].name === "read_requirements") {
+      if (first.content.includes("Advisor recommendations")) {
+        const confirmed = first.content.includes("confirmed ENGL 1030");
+        const groups = [
+          { label: "ENGL 1010", choices: [{ code: "ENGL1010", classNumber: null }] },
+          { label: "World Cultures", choices: [{ code: "ENGL 1900", classNumber: null }, { code: "ENGL 1020", classNumber: null }] },
+        ];
+        if (confirmed) groups.push({ label: "ENGL 1030", choices: [{ code: "ENGL 1030", classNumber: null }] });
+        return call("read_requirements", {
+          groups, pending: confirmed ? [] : ["Confirm the next course with your department advisor."],
+          courseCount: null, scheduleName: null, career: "UGRD", hasSectionPreferences: false,
+        });
+      }
+      return call("read_requirements", {
+        groups: [], pending: [], courseCount: null, scheduleName: null, career: "UGRD", hasSectionPreferences: false,
+      });
+    }
     assert.equal(first.content, longGoals);
     assert.ok(input.some((item) => "role" in item && [longRequirements, "Alternative"].includes(item.content)));
     assert.equal(tool_choice, "required");
@@ -131,6 +149,33 @@ test("advisor saves real conflict-free drafts and publishes only opted-in matchi
     assert.deepEqual(await matches(sameInterest), ["10003"]);
     assert.equal((await send(`schedules/${alternative.schedule.id}/commitment`, { committed: false }, owner, "PUT")).status, 200);
     assert.deepEqual(await matches(sameInterest), []);
+
+    const fromNote = {
+      ...body, requestId: randomUUID(),
+      goals: "Advisor recommendations: ENGL 1010. Pick one for World Cultures: ENGL 1900 or 1020. Confirm next course with department. Alternate: ENGL 1030.",
+      messages: [{ role: "user", content: "Use the recommendations above." }],
+    };
+    const review = await send("message", fromNote, owner);
+    assert.equal(review.status, 200);
+    const proposal = await review.json();
+    assert.match(proposal.message, /ENGL\. 1010, ENGL\. 1020/);
+    assert.deepEqual(proposal.partial.missing, ["Confirm the next course with your department advisor."]);
+    assert.equal(proposal.schedule, undefined);
+    assert.equal((await list(owner)).length, 2);
+    assert.equal((await send(`schedules/${proposal.partial.id}/save-partial`, {}, sameInterest)).status, 404);
+    const approved = await (await send(`schedules/${proposal.partial.id}/save-partial`, {}, owner)).json();
+    assert.deepEqual(approved.schedule.sections.map(({ section }: { section: Section }) => section.classNumber), ["10001", "10003"]);
+    const retry = await (await send(`schedules/${proposal.partial.id}/save-partial`, {}, owner)).json();
+    assert.equal(retry.schedule.id, approved.schedule.id);
+
+    const clarified = await (await send("message", {
+      ...fromNote, requestId: randomUUID(), messages: [
+        ...fromNote.messages, { role: "assistant", content: proposal.message },
+        { role: "user", content: "The department confirmed ENGL 1030." },
+      ],
+    }, owner)).json();
+    assert.equal(clarified.partial, undefined);
+    assert.deepEqual(clarified.schedule.sections.map(({ section }: { section: Section }) => section.classNumber), ["10001", "10003", "10005"]);
   } finally {
     await new Promise<void>((resolve) => server.close(() => resolve()));
     await db.dropSchema(schema);

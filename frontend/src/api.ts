@@ -1,9 +1,10 @@
 import type { CourseSearchResponse, Option, Selections } from "../../backend/src/cuny/scraper";
 import type { ProfessorSearchResponse } from "../../backend/src/professors/search";
 import type { AdvisorMessage } from "../../backend/src/advisor/model";
+import type { PartialDraft } from "../../backend/src/advisor/router";
 import type { AdvisorSchedule } from "../../backend/src/advisor/store";
 
-export type { AdvisorMessage, AdvisorSchedule };
+export type { AdvisorMessage, AdvisorSchedule, PartialDraft };
 
 export interface Catalog {
   term: string;
@@ -104,7 +105,11 @@ export function sendAdvisorGoals(goals: string) {
 }
 
 export function sendAdvisorMessage(scope: Catalog, goals: string, messages: AdvisorMessage[], requestId: string) {
-  return send<{ message: string; schedule?: AdvisorSchedule }>("message", "POST", { ...scope, goals, messages, requestId });
+  return send<{ message: string; schedule?: AdvisorSchedule; partial?: PartialDraft }>("message", "POST", { ...scope, goals, messages, requestId });
+}
+
+export function saveAdvisorPartial(id: string) {
+  return send<{ schedule: AdvisorSchedule }>(`schedules/${id}/save-partial`, "POST", {});
 }
 
 export function setAdvisorCommitment(id: string, committed: boolean) {

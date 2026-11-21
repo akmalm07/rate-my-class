@@ -1,6 +1,9 @@
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import type { Selections } from "../../backend/src/cuny/scraper";
-import { errorMessage, sendAdvisorGoals, sendAdvisorMessage, type AdvisorMessage, type AdvisorSchedule, type Catalog } from "./api";
+import {
+  errorMessage, saveAdvisorPartial, sendAdvisorGoals, sendAdvisorMessage,
+  type AdvisorMessage, type AdvisorSchedule, type Catalog, type PartialDraft,
+} from "./api";
 
 const greeting: AdvisorMessage = {
   role: "assistant",
@@ -29,6 +32,7 @@ export function Advisor({ selections, catalog, onGoals, onSave, onView }: Adviso
   const [pending, setPending] = useState(false);
   const [error, setError] = useState("");
   const [schedule, setSchedule] = useState<AdvisorSchedule>();
+  const [partial, setPartial] = useState<PartialDraft>();
   const goals = messages[1]?.content;
 
   useEffect(() => {
@@ -61,6 +65,29 @@ export function Advisor({ selections, catalog, onGoals, onSave, onView }: Adviso
     setInput("");
     setError("");
     setSchedule(undefined);
+    setPartial(undefined);
+  }
+
+  function showSaved(draft: AdvisorSchedule) {
+    onSave(draft);
+    setSchedule(draft);
+    setPartial(undefined);
+  }
+
+  async function approvePartial() {
+    if (!partial || pending) return;
+    setPending(true);
+    setError("");
+    try {
+      const { schedule } = await saveAdvisorPartial(partial.id);
+      showSaved(schedule);
+      setMessages((current) => [...current, { role: "assistant", content: "I saved your partial draft in Saved schedules." }]);
+      if (!isOpen.current) setUnread(true);
+    } catch (error) {
+      setError(errorMessage(error));
+    } finally {
+      setPending(false);
+    }
   }
 
   async function send(value: string) {
@@ -75,14 +102,12 @@ export function Advisor({ selections, catalog, onGoals, onSave, onView }: Adviso
     setPending(true);
     setError("");
     try {
-      const result: { message: string; schedule?: AdvisorSchedule } = goals
+      const result: { message: string; schedule?: AdvisorSchedule; partial?: PartialDraft } = goals
         ? await sendAdvisorMessage({ term, college }, goals, [...messages.slice(3, 5), ...messages.slice(5).slice(-10), entry], retry.current!.id)
         : await sendAdvisorGoals(message);
       if (!goals) onGoals();
-      if (result.schedule) {
-        onSave(result.schedule);
-        setSchedule(result.schedule);
-      }
+      if (result.schedule) showSaved(result.schedule);
+      else setPartial(result.partial);
       setMessages((current) => [...current, entry, { role: "assistant", content: result.message }]);
       setInput("");
       retry.current = undefined;
@@ -111,6 +136,11 @@ export function Advisor({ selections, catalog, onGoals, onSave, onView }: Adviso
           {messages.map(({ role, content }, index) => <p className={`advisor-message ${role}`} key={index}>{content}</p>)}
           {pending && <p className="advisor-progress" role="status">{goals ? "Checking CUNY classes and meeting times…" : "Reading your goals…"}</p>}
           {error && <p className="advisor-error" role="alert">{error}</p>}
+          {partial && (
+            <button className="share-button" type="button" disabled={pending} onClick={() => void approvePartial()}>
+              Save partial draft
+            </button>
+          )}
           {schedule && (
             <button className="share-button" type="button" onClick={() => {
               closeChat();

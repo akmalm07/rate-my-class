@@ -6,7 +6,12 @@ import {
   AdvisorError, classesQuestion, classifyGoals, runOpenAI, suggestSchedule,
   type AdvisorMessage, type CunyCatalog, type RunModel,
 } from "./model.js";
-import { createAdvisorStore } from "./store.js";
+import { createAdvisorStore, type AdvisorSchedule } from "./store.js";
+
+export interface PartialDraft {
+  id: string;
+  missing: string[];
+}
 
 const cookieName = "rmc_advisor";
 const uuid = /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/i;
@@ -39,6 +44,12 @@ export function createAdvisorRouter(database: Sequelize | undefined, catalog: Cu
   let active = 0;
   const usage = new Map<string, { count: number; until: number }>();
   const activeClients = new Set<string>();
+  const partialDrafts = new Map<string, {
+    message: string;
+    partial: PartialDraft;
+    schedule: AdvisorSchedule;
+    expires: number;
+  }>();
 
   function getStore() {
     if (!store) throw new AdvisorError(503, "Configure PostgreSQL to use the schedule advisor.");
@@ -124,13 +135,47 @@ export function createAdvisorRouter(database: Sequelize | undefined, catalog: Cu
       response.json({ message: "I saved your draft in Saved schedules.", schedule: previous });
       return;
     }
+    const key = `${owner}:${requestId}`;
+    const existing = partialDrafts.get(key);
+    if (existing && existing.expires > Date.now()) {
+      response.json({ message: existing.message, partial: existing.partial });
+      return;
+    }
     const result = await useModel(request, async (signal) => {
-      const { message, draft } = await suggestSchedule(catalog, term, college, goals, history, runModel, signal);
+      const { message, draft, missing } = await suggestSchedule(catalog, term, college, goals, history, runModel, signal);
       signal.throwIfAborted();
-      const schedule = draft && await db.save(owner, { ...draft, id: requestId, term, college, interests, committed: false });
-      return { message, schedule };
+      if (!draft) return { message };
+      const schedule = { ...draft, id: requestId, term, college, interests, committed: false };
+      if (missing?.length) {
+        const now = Date.now();
+        for (const [key, entry] of partialDrafts) {
+          if (entry.expires <= now) partialDrafts.delete(key);
+        }
+        const partial = { id: requestId, missing };
+        partialDrafts.set(key, { message, partial, schedule, expires: now + 15 * 60_000 });
+        return { message, partial };
+      }
+      return { message, schedule: await db.save(owner, schedule) };
     });
     response.json(result);
+  });
+
+  router.post("/schedules/:id/save-partial", async (request, response) => {
+    const db = getStore();
+    const owner = requiredOwner(request);
+    const { id } = request.params;
+    if (!uuid.test(id)) throw new AdvisorError(400, "Provide a partial draft ID.");
+    const key = `${owner}:${id}`;
+    const pending = partialDrafts.get(key);
+    const existing = await db.find(owner, id);
+    if (existing) {
+      response.json({ schedule: existing });
+      return;
+    }
+    if (!pending || pending.expires <= Date.now()) throw new AdvisorError(404, "This partial draft has expired. Ask the advisor to build it again.");
+    const schedule = await db.save(owner, pending.schedule);
+    partialDrafts.delete(key);
+    response.json({ schedule });
   });
 
   router.put("/schedules/:id/commitment", async (request, response) => {

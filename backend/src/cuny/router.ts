@@ -1,5 +1,5 @@
 import { Router, type ErrorRequestHandler } from "express";
-import { DataTypes, Model, type Sequelize } from "sequelize";
+import { DataTypes, Model, Op, type Sequelize } from "sequelize";
 import {
   scrapeSchedule, scrapeSelections, scrapeSubjects,
   type Course, type CourseSearchResponse, type Option, type Schedule, type Selections,
@@ -188,7 +188,19 @@ export function createCunyCatalog(
     return { status: 202, retryAfter: 5 } as const;
   }
 
-  return { getSelections, checkCatalog, getSubjects, getCourses };
+  async function getCachedCourses(term: string, college: string, subjects: string[]) {
+    const table = await getCache();
+    const full = await table.findByPk(`schedule:${term}:${college}`);
+    if (full) return { complete: true, courses: (full.getDataValue("payload") as Schedule).courses };
+    const keys = subjects.map((subject) => `subject:${term}:${college}:${subject}`);
+    const snapshots = await table.findAll({ where: { key: { [Op.in]: keys } } });
+    return {
+      complete: keys.length > 0 && snapshots.length === keys.length,
+      courses: snapshots.flatMap((snapshot) => (snapshot.getDataValue("payload") as Schedule).courses),
+    };
+  }
+
+  return { getSelections, checkCatalog, getSubjects, getCourses, getCachedCourses };
 }
 
 export function catalogIds(term: unknown, college: unknown) {
